@@ -1,0 +1,3 @@
+orders.db
+*.log
+__pycache__/
