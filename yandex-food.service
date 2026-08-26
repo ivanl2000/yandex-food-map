@@ -1,0 +1,20 @@
+[Unit]
+Description=Yandex Food Map Server
+After=network.target
+
+[Service]
+Type=exec
+User=root
+WorkingDirectory=/opt/yandex_food
+ExecStart=/usr/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8081 --log-level info
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+Environment=YF_DB=/opt/yandex_food/orders.db
+Environment=YF_PORT=8081
+Environment=YF_LOG_LEVEL=INFO
+# Environment=YF_UPDATE_TOKEN=your-secret-token
+
+[Install]
+WantedBy=multi-user.target
