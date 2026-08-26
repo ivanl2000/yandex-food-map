@@ -11,23 +11,22 @@ PORT = int(os.environ.get('PORT', 8081))
 
 SEL = "SELECT id,phone,name,created_at as date,city,street,house,place_name,lat,lon,amount_rub FROM orders"
 
-def cap(s):
-    """Capitalize first letter, keep rest"""
-    if not s: return s
-    if s[0].isalpha():
-        return s[0].upper() + s[1:]
-    return s
+def prefix_upper(prefix):
+    """Upper bound for indexed prefix range queries."""
+    if not prefix:
+        return '~'
+    return prefix + '\uffff'
 
 def range_query(cursor, field, prefix, limit):
     """Range query: field >= prefix AND field < prefix_next, uses index"""
-    if not prefix: return []
+    if not prefix:
+        return []
     prefix = prefix[:50]
-    nxt = prefix[:-1] + chr(ord(prefix[-1]) + 1) if prefix else '~'
     rows = []
     try:
         for r in cursor.execute(
             f"{SEL} WHERE {field} >= ? AND {field} < ? LIMIT ?",
-            (prefix, nxt, limit)
+            (prefix, prefix_upper(prefix), limit)
         ):
             rows.append(dict(r))
     except Exception as e:
@@ -37,57 +36,50 @@ def range_query(cursor, field, prefix, limit):
 def search(q, limit=200):
     if not q or len(q.strip()) < 2:
         return []
-    qs = q.strip().lower()[:50]
+
+    raw = q.strip()[:50]
+    qs = raw.lower()
     qd = re.sub(r'[^0-9]', '', qs)
-    is_phone = len(qd) >= 7 and (len(qd) >= len(qs) * 0.5)
-    
+    is_phone = len(qd) >= 7 and len(qd) >= len(qs) * 0.5
+
     conn = sqlite3.connect(DB, timeout=5)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
     rows = []
     seen = set()
-    
+
     def add(rs):
         for r in rs:
             if r['id'] not in seen:
                 seen.add(r['id'])
                 rows.append(r)
-    
+
     try:
-        # Phone range query
-        if is_phone or len(qd) >= 3:
-            add(range_query(c, 'phone', qd, limit))
-            if is_phone or len(rows) >= limit:
-                conn.close()
-                return rows[:limit]
-        
-        # Name range: try lowercase, then capitalized
-        if len(rows) < limit:
-            add(range_query(c, 'name', qs, limit - len(rows)))
-        if len(rows) < limit:
-            add(range_query(c, 'name', cap(qs), limit - len(rows)))
-        
-        if len(rows) >= limit:
+        if is_phone:
+            add(range_query(c, 'phone_norm', qd, limit))
             conn.close()
             return rows[:limit]
-        
-        # City range: try lowercase, then capitalized
-        add(range_query(c, 'city', qs, limit - len(rows)))
-        if len(rows) < limit:
-            add(range_query(c, 'city', cap(qs), limit - len(rows)))
-        
-        if len(rows) >= limit:
-            conn.close()
-            return rows[:limit]
-        
-        # Place name
-        add(range_query(c, 'place_name', qs, limit - len(rows)))
-        if len(rows) < limit:
-            add(range_query(c, 'place_name', cap(qs), limit - len(rows)))
-    
+
+        if len(qd) >= 3:
+            add(range_query(c, 'phone_norm', qd, limit - len(rows)))
+
+        text_fields = (
+            ('name_lc', qs),
+            ('city_lc', qs),
+            ('street_lc', qs),
+            ('place_name_lc', qs),
+        )
+        for field, prefix in text_fields:
+            if len(rows) >= limit:
+                break
+            add(range_query(c, field, prefix, limit - len(rows)))
+
+        if qs.isdigit():
+            add(range_query(c, 'house', qs, limit - len(rows)))
+
     except Exception as e:
         log.error(f'search: {e}')
-    
+
     conn.close()
     return rows[:limit]
 
